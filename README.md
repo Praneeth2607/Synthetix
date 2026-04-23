@@ -10,34 +10,42 @@ A full-stack, multimodal AI assistant designed to enhance student productivity. 
 
 ---
 
-## Tech Stack
+## Project Structure 📁
+
+This project is organized as a monorepo containing both the frontend and backend services:
+
+- **`synthetix-web/`**: The Next.js frontend application.
+- **`synthetix-api/`**: The FastAPI backend service.
+
+---
+
+## Tech Stack 🛠️
+
 *   **Frontend**: Next.js 15, React, Tailwind CSS v4, Framer Motion, Lucide React, Axios.
 *   **Backend**: Python, FastAPI, Uvicorn, OpenAI Python Client, PyPDF.
 *   **AI Models**: `gpt-4.1-nano` (Knowledge Engine), `imagen-4.0-generate-001` (Visuals Engine).
 
 ---
 
-## Setup & Run Instructions
+## Setup & Run Instructions 🚀
 
-This project is split into two directories: `synthetix-api` (Backend) and `synthetix-web` (Frontend). Follow these steps to run the servers locally.
+Follow these steps to run the servers locally.
 
 ### 1. Start the FastAPI Backend
-Open a terminal in the root directory and run:
+Open a terminal in the root directory:
 
 ```bash
 cd synthetix-api
 
-# Create a virtual environment if you haven't yet:
+# Create and activate a virtual environment
 python -m venv venv
-
-# Activate the virtual environment
-# On Windows:
+# Windows:
 .\venv\Scripts\activate
-# On Mac/Linux:
+# Mac/Linux:
 source venv/bin/activate
 
 # Install dependencies
-pip install fastapi uvicorn openai python-multipart pypdf pillow python-dotenv
+pip install -r requirements.txt
 
 # Start the Backend Server
 python -m uvicorn main:app --reload
@@ -45,29 +53,29 @@ python -m uvicorn main:app --reload
 *The backend API will run on **http://localhost:8000**.*
 
 ### 2. Configure Environment Variables
-Before making requests, ensure you have set up your API keys in the backend directory.
-1. Navigate to `/synthetix-api`
-2. Copy `.env.example` and rename it to `.env`.
-3. Fill in your `NAVIGATE_API_KEY`. (Note: The `.env` file is excluded from git tracking for security).
+1. Navigate to `synthetix-api/`
+2. Create a `.env` file from the provided example.
+3. Add your `NAVIGATE_API_KEY` and `SUPABASE_URL`/`SUPABASE_KEY`.
 
 ### 3. Start the Next.js Frontend
-Open a **new** terminal in the root directory and run:
+Open a **new** terminal in the root directory:
 
 ```bash
 cd synthetix-web
 
-# Install all node_modules dependencies
+# Install dependencies
 npm install
 
-# Start the Frontend Development Server
+# Start the Development Server
 npm run dev
 ```
 *The Synthetix Dashboard will run on **http://localhost:3000**.*
 
 ---
 
-## Usage
-1. Navigate your web browser to `http://localhost:3000`.
-2. Drop a PDF document or type your study notes into the **Input Nexus**.
-3. Toggle the **Synthesis Modules** you want to generate.
-4. Click **Ignite Synthesis** and watch the AI process your material into visual diagrams, succinct notes, and a test quiz!
+## Usage 💡
+1. Open `http://localhost:3000` in your browser.
+2. Upload a PDF or enter notes in the **Input Nexus**.
+3. Customize your synthesis using the **Module Toggles**.
+4. Click **Ignite Synthesis** to generate your study materials!
+
