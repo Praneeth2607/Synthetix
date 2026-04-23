@@ -1,4 +1,5 @@
 import os
+import re
 import base64
 import io
 from typing import List, Optional
@@ -9,6 +10,7 @@ import openai
 from PIL import Image
 import pypdf
 from dotenv import load_dotenv
+from supabase import create_client, Client
 
 load_dotenv()
 
@@ -38,6 +40,10 @@ AI_CLIENT = openai.OpenAI(
 CHAT_MODEL = "gpt-4.1-nano"
 IMAGE_MODEL = "imagen-4.0-generate-001"
 
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_KEY")
+db: Client = create_client(supabase_url, supabase_key) if supabase_url and supabase_key else None
+
 class ChatRequest(BaseModel):
     message: str
     context: Optional[str] = None
@@ -56,10 +62,14 @@ def extract_text_from_pdf(file_bytes):
 @app.post("/synthesize")
 async def synthesize(
     text: Optional[str] = Form(None),
+    query: Optional[str] = Form(None),
+    user_id: Optional[str] = Form(None),
+    access_token: Optional[str] = Form(None),
     files: List[UploadFile] = File(None),
-    generate_poster: bool = Form(True),
+    generate_graph: bool = Form(True),
     generate_summary: bool = Form(True),
     generate_quiz: bool = Form(True),
+    generate_audio: bool = Form(True),
     num_summary: int = Form(5),
     num_quiz: int = Form(3)
 ):
@@ -80,22 +90,44 @@ async def synthesize(
     if not combined_content:
         raise HTTPException(status_code=400, detail="No content provided for synthesis.")
 
-    # 1. Generate text summaries/quizzes/poster_prompt using GPT-4.1-nano
+    # 1. Generate text summaries/quizzes/graph using GPT-4.1-nano
     synthesis_data = {}
     
-    if generate_summary or generate_quiz or generate_poster:
+    if generate_summary or generate_quiz or generate_graph or generate_audio:
         instructions = ""
         json_structure = {}
         
+        if query:
+            match = re.search(r'(\d+)\s*mark', query, re.IGNORECASE)
+            if match:
+                marks = match.group(1)
+                instructions += f"\n- Focus the entire output on answering and exploring this specific query based on the document: '{query}'. Provide a highly detailed, structured response explicitly tailored to score full marks for a {marks}-mark university/college question. Include exactly {marks} distinct points or equivalent comprehensive depth to maximize points."
+            else:
+                instructions += f"\n- Focus the entire output on answering and exploring this specific query based on the document: '{query}'."
+            json_structure["query_answer"] = "Direct answer to the query..."
+            
         if generate_summary:
             instructions += f"\n- A clear, concise {num_summary}-point revision summary."
             json_structure["summary"] = ["point1", "point2", "..."]
         if generate_quiz:
             instructions += f"\n- A set of {num_quiz} challenging MCQ questions with answers."
             json_structure["quiz"] = [{"question": "...", "options": ["A", "B", "C", "D"], "answer": "..."}]
-        if generate_poster:
-            instructions += "\n- A creative prompt for an AI image generator to create a visual 'Concept Poster' for this topic."
-            json_structure["poster_prompt"] = "..."
+        if generate_graph:
+            instructions += "\n- A knowledge graph depicting the main concepts and their relationships."
+            json_structure["knowledge_graph"] = {
+                "nodes": [{"id": "1", "label": "Concept Name"}],
+                "edges": [{"source": "1", "target": "2", "label": "Relationship"}]
+            }
+        
+        if generate_audio:
+            word_count = len(combined_content.split())
+            if word_count < 500:
+                instructions += "\n- Generate a ~1 minute short, engaging audio podcast script summarizing the core concepts (approx 150 words)."
+            elif word_count < 2000:
+                instructions += "\n- Generate a ~3 minute detailed audio podcast script explaining the nuances of the text like an enthusiastic radio host (approx 450 words)."
+            else:
+                instructions += "\n- Generate a comprehensive ~5 minute engaging podcast script exploring the depth of the text, acting as an expert academic tutor speaking to a student (approx 750 words)."
+            json_structure["podcast_script"] = "Script text..."
             
         import json
         synthesis_prompt = f"""
@@ -115,34 +147,69 @@ async def synthesize(
                 messages=[{"role": "user", "content": synthesis_prompt}],
                 response_format={ "type": "json_object" }
             )
-            synthesis_data = eval(text_response.choices[0].message.content) # Simple parser for demo
+            
+            content = text_response.choices[0].message.content
+            # Remove markdown code blocks if present
+            if content.startswith("```"):
+                content = re.sub(r'^```json\s*|```$', '', content.strip(), flags=re.MULTILINE)
+            synthesis_data = json.loads(content)
         except Exception as e:
-            # Fallback if AI output isn't clean
-            import json
-            try:
-                synthesis_data = json.loads(text_response.choices[0].message.content)
-            except:
-                raise HTTPException(status_code=500, detail=f"AI Synthesis failed: {str(e)}")
+            print(f"JSON Parse Error: {e}")
+            raise HTTPException(status_code=500, detail=f"AI Synthesis failed to parse JSON: {str(e)}")
 
-    # 2. Generate the Concept Poster using Imagen
-    poster_url = None
-    if generate_poster and "poster_prompt" in synthesis_data:
+        audio_base64 = None
+        podcast_error = None
+        if generate_audio and synthesis_data.get("podcast_script"):
+            try:
+                # Use a specific try block for TTS to capture exact failure reason
+                tts_resp = AI_CLIENT.audio.speech.create(
+                    model="gpt-4o-mini-tts",
+                    voice="onyx",
+                    input=synthesis_data["podcast_script"][:4080]
+                )
+                audio_base64 = base64.b64encode(tts_resp.content).decode("utf-8")
+            except Exception as e:
+                podcast_error = str(e)
+                print(f"TTS Error: {e}")
+
+    user_db = db
+    if access_token and supabase_url and supabase_key:
+        from supabase import ClientOptions
+        user_db = create_client(supabase_url, supabase_key, options=ClientOptions(headers={'Authorization': f'Bearer {access_token}'}))
+
+    if user_db and user_id:
         try:
-            image_response = AI_CLIENT.images.generate(
-                model=IMAGE_MODEL,
-                prompt=f"Educational infographic poster for: {synthesis_data['poster_prompt']}. Professional, 4k, digital art style.",
-                n=1,
-                size="1024x1024",
-                response_format="b64_json"
-            )
-            poster_url = f"data:image/png;base64,{image_response.data[0].b64_json}"
+            # Create document
+            doc_data = user_db.table("documents").insert({
+                "user_id": user_id,
+                "title": files[0].filename if (files and getattr(files[0], "filename", None)) else "Direct Note Input",
+                "raw_content": combined_content
+            }).execute()
+            
+            if doc_data.data:
+                doc_id = doc_data.data[0]["id"]
+                
+                # Save synthesis
+                user_db.table("syntheses").insert({
+                    "document_id": doc_id,
+                    "user_id": user_id,
+                    "query": query,
+                    "query_answer": synthesis_data.get("query_answer"),
+                    "summary": synthesis_data.get("summary"),
+                    "quiz": synthesis_data.get("quiz"),
+                    "knowledge_graph": synthesis_data.get("knowledge_graph")
+                }).execute()
         except Exception as e:
-            poster_url = None # Optional fallback
+            print(f"Database save error: {e}")
 
     return {
+        "query_answer": synthesis_data.get("query_answer"),
         "summary": synthesis_data.get("summary"),
         "quiz": synthesis_data.get("quiz"),
-        "poster_url": poster_url
+        "knowledge_graph": synthesis_data.get("knowledge_graph"),
+        "podcast_script": synthesis_data.get("podcast_script"),
+        "audio_base64": audio_base64 if 'audio_base64' in locals() else None,
+        "podcast_error": podcast_error if 'podcast_error' in locals() else None
     }
 
 @app.post("/chat")
